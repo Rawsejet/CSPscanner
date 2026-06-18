@@ -12,13 +12,13 @@ st.set_page_config(page_title="S&P 100 CSP Signal Dashboard", layout="wide")
 
 @st.cache_data(ttl=300, show_spinner=False)
 def run_scan(api_key: str, use_sandbox: bool, horizon_key: str,
-             max_spread_pct: float, min_iv_rank: float):
+             max_spread_pct: float, min_iv_rank: float, exclude_earnings: bool):
     """Run a scan, caching results for 5 minutes to avoid hammering the API.
 
-    Cached on (token, env, horizon, spread, IV rank): re-clicking Run with the
-    same settings is instant and costs no API credits. Returns (DataFrame,
-    diagnostics summary dict); the custom diagnostics object is stripped so the
-    result caches cleanly.
+    Cached on (token, env, horizon, spread, IV rank, exclude-earnings):
+    re-clicking Run with the same settings is instant and costs no API credits.
+    Returns (DataFrame, diagnostics summary dict); the custom diagnostics object
+    is stripped so the result caches cleanly.
     """
     client = TradierClient(api_key, use_sandbox=use_sandbox)
     scanner = CSPScanner(client)
@@ -26,6 +26,7 @@ def run_scan(api_key: str, use_sandbox: bool, horizon_key: str,
         horizon=horizon_key,
         max_spread_pct=max_spread_pct,
         min_iv_rank=min_iv_rank,
+        exclude_earnings=exclude_earnings,
     )
     diag = df.attrs.pop("diagnostics", None)
     return df, (diag.summary() if diag else None)
@@ -68,6 +69,16 @@ min_iv_rank = st.sidebar.slider(
         "tickers without enough history are not filtered."
     ),
 )
+exclude_earnings = st.sidebar.checkbox(
+    "Exclude earnings inside expiry window",
+    value=True,
+    help=(
+        "Drop contracts whose expiry window contains a known earnings date — "
+        "binary event risk that can dwarf the premium, especially on short "
+        "(Income) horizons. Tickers whose earnings data is unavailable are kept "
+        "and shown as N/A (an empty calendar is never treated as 'no earnings')."
+    ),
+)
 
 st.title("S&P 100 CSP Signal Dashboard")
 st.markdown("Scanning for Low-to-Medium risk Cash Secured Put opportunities.")
@@ -87,7 +98,7 @@ horizon_key = "Income" if "Income" in horizon else "Classic"
 if st.button("Run Scanner"):
     with st.spinner(f"Scanning S&P 100 for {horizon_key} signals..."):
         try:
-            df, diag = run_scan(api_key, use_sandbox, horizon_key, max_spread / 100, min_iv_rank)
+            df, diag = run_scan(api_key, use_sandbox, horizon_key, max_spread / 100, min_iv_rank, exclude_earnings)
         except TradierAPIError as e:
             st.error(f"API Error: {e}")
             if e.status_code in (401, 403):
@@ -118,10 +129,20 @@ if st.button("Run Scanner"):
                     "Low ROC": s["rejected_roc"],
                     "Low IV Rank": s["rejected_iv_rank"],
                     "Not OTM": s["rejected_otm"],
+                    "Earnings in Window": s["rejected_earnings"],
                 }
                 st.write("**Rejection breakdown:**")
                 rej_df = pd.DataFrame(list(rejections.items()), columns=["Reason", "Count"])
                 st.dataframe(rej_df, use_container_width=True, hide_index=True)
+
+                if s["fundamentals_unavailable"]:
+                    st.caption(
+                        f"⚠️ Earnings/dividend data was unavailable for "
+                        f"{s['fundamentals_unavailable']} ticker(s) — their contracts "
+                        "show **N/A** and can't be excluded by the earnings filter. "
+                        "The beta fundamentals endpoints require an entitled "
+                        "Tradier plan; verify access if you expect this data."
+                    )
 
         if df.empty:
             st.info("No signals found matching the risk criteria.")
@@ -173,12 +194,20 @@ if st.button("Run Scanner"):
                 premium = row["Premium"]
                 max_contracts = int(available_cash // (strike * 100))
                 total_premium = max_contracts * premium * 100
+                capital_deployed = max_contracts * strike * 100
+                breakeven = row["Break-even"]
+                cushion = row["Cushion %"]
 
                 with cols[i % max_cols]:
                     st.metric(
                         f"{row['Ticker']} (${strike:.0f}P)",
                         f"{max_contracts} Contracts",
                         f"Est. Premium: ${total_premium:.2f}",
+                    )
+                    cushion_txt = f" ({cushion:.1f}% below spot)" if pd.notna(cushion) else ""
+                    st.caption(
+                        f"Capital tied up: ${capital_deployed:,.0f} · "
+                        f"Break-even ${breakeven:.2f}{cushion_txt}"
                     )
 
                     # Quick link to the Tradier dashboard (sandbox accounts use
@@ -192,6 +221,16 @@ if st.button("Run Scanner"):
             st.markdown("---")
             top = df.iloc[0]
             st.subheader(f"Risk Analysis: {top['Ticker']} @ ${top['Strike']:.0f} Strike")
+
+            cushion = top["Cushion %"]
+            rcols = st.columns(3)
+            rcols[0].metric("Break-even", f"${top['Break-even']:.2f}")
+            rcols[1].metric(
+                "Downside cushion",
+                f"{cushion:.1f}%" if pd.notna(cushion) else "N/A",
+                help="How far the stock can fall before this trade loses money at expiry.",
+            )
+            rcols[2].metric("Capital / contract", f"${top['Capital']:,.0f}")
 
             prob_assignment = abs(top["Delta"]) * 100
             st.write(f"**Estimated Probability of Assignment:** {prob_assignment:.1f}%")

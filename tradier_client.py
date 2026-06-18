@@ -1,6 +1,7 @@
 import requests
 import time
 import logging
+from datetime import datetime
 from typing import List, Dict, Any, Optional
 
 logging.basicConfig(level=logging.INFO)
@@ -148,51 +149,117 @@ class TradierClient:
             logger.warning(f"Could not fetch option chain for {symbol} on {expiration_date}: {e}")
             return []
 
-    def get_earnings_dates(self, symbol: str) -> List[str]:
-        """
-        Fetch upcoming earnings dates for a symbol.
+    @staticmethod
+    def _normalize_date(raw: Any) -> Optional[str]:
+        """Normalize 'YYYY-MM-DD' or 'YYYY-MM-DDThh:mm:ss' to 'YYYY-MM-DD'.
 
-        Uses Tradier fundamentals corporate-calendar endpoint.
-        Returns a list of date strings (YYYY-MM-DD).
+        Returns None for anything that isn't a parseable date. The fundamentals
+        endpoints report datetimes (e.g. '2026-06-25T00:00:00'); the scanner's
+        windowing parses strict '%Y-%m-%d', so we truncate and validate here.
         """
-        endpoint = "markets/calendar"
-        params = {
-            "type": "earnings",
-            "symbol": symbol
-        }
-        data = self._request(endpoint, params)
-
+        if not isinstance(raw, str) or len(raw) < 10:
+            return None
+        candidate = raw[:10]
         try:
-            items = data.get('earnings', {}).get('earning', [])
-            if isinstance(items, dict):
-                items = [items]
-            return [item.get('date', '') for item in items if item.get('date')]
-        except (KeyError, TypeError) as e:
-            logger.warning(f"Could not fetch earnings dates for {symbol}: {e}")
-            return []
+            datetime.strptime(candidate, "%Y-%m-%d")
+        except ValueError:
+            return None
+        return candidate
+
+    def _fundamentals_dates(self, symbol: str, endpoint: str, table: str,
+                            date_keys, event_filter=None) -> List[str]:
+        """Pull normalized YYYY-MM-DD dates out of a beta fundamentals response.
+
+        The beta fundamentals endpoints return a list of
+        ``{request, type, results: [{tables: {<table>: [ {...}, ... ]}}]}``. The
+        exact field names vary by symbol, so for each row we look across several
+        candidate ``date_keys`` (and one level of nested dicts), optionally gated
+        by ``event_filter``.
+
+        Raises TradierAPIError if the request itself fails (e.g. the beta
+        fundamentals data isn't entitled on this plan) so the caller can mark the
+        data *unavailable* rather than reporting a false "no events".
+        """
+        data = self._request(endpoint, {"symbols": symbol})
+
+        dates: List[str] = []
+        try:
+            entries = data if isinstance(data, list) else [data]
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    continue
+                for result in entry.get("results", []) or []:
+                    if not isinstance(result, dict):
+                        continue
+                    rows = (result.get("tables") or {}).get(table) or []
+                    if isinstance(rows, dict):
+                        rows = [rows]
+                    for row in rows:
+                        if not isinstance(row, dict):
+                            continue
+                        if event_filter and not event_filter(row):
+                            continue
+                        found = self._row_date(row, date_keys)
+                        if found:
+                            dates.append(found)
+        except (KeyError, TypeError, AttributeError) as e:
+            logger.warning(f"Could not parse {table} for {symbol}: {e}")
+        return dates
+
+    def _row_date(self, row: Dict[str, Any], date_keys) -> Optional[str]:
+        """First normalizable date found in ``row`` (or one level of nesting)."""
+        for key in date_keys:
+            norm = self._normalize_date(row.get(key))
+            if norm:
+                return norm
+        # Some tables nest the payload, e.g. {"cash_dividend": {"ex_date": ...}}.
+        for val in row.values():
+            if isinstance(val, dict):
+                for key in date_keys:
+                    norm = self._normalize_date(val.get(key))
+                    if norm:
+                        return norm
+        return None
+
+    def get_earnings_dates(self, symbol: str) -> List[str]:
+        """Upcoming earnings dates (YYYY-MM-DD) for a symbol.
+
+        Uses the beta ``markets/fundamentals/calendars`` endpoint and keeps only
+        earnings-type events from each result's ``corporate_calendars`` table.
+        (The old ``markets/calendar`` endpoint is Tradier's market *holiday*
+        calendar and never contained earnings, so the warning was always "NO".)
+
+        Raises TradierAPIError on transport/auth failure so the scanner can
+        distinguish "data unavailable" from "no earnings in window".
+        """
+        def _is_earnings(row: Dict[str, Any]) -> bool:
+            event = str(row.get("event", "")).lower()
+            # event_type 14/15 are earnings releases in Tradier's data; fall back
+            # to the human-readable event text when the code is absent.
+            return row.get("event_type") in (14, 15) or "earning" in event
+
+        return self._fundamentals_dates(
+            symbol,
+            "markets/fundamentals/calendars",
+            "corporate_calendars",
+            date_keys=("begin_date_time", "begin_date", "date",
+                       "estimated_date_for_next_event"),
+            event_filter=_is_earnings,
+        )
 
     def get_dividend_dates(self, symbol: str) -> List[str]:
-        """
-        Fetch upcoming ex-dividend dates for a symbol.
+        """Upcoming ex-dividend dates (YYYY-MM-DD) for a symbol.
 
-        Uses Tradier fundamentals corporate-calendar endpoint.
-        Returns a list of date strings (YYYY-MM-DD).
+        Uses the beta ``markets/fundamentals/dividends`` endpoint and pulls
+        ex-dividend dates from the ``cash_dividends`` table. Raises
+        TradierAPIError on transport/auth failure (see get_earnings_dates).
         """
-        endpoint = "markets/calendar"
-        params = {
-            "type": "dividends",
-            "symbol": symbol
-        }
-        data = self._request(endpoint, params)
-
-        try:
-            items = data.get('dividends', {}).get('dividend', [])
-            if isinstance(items, dict):
-                items = [items]
-            return [item.get('date', '') for item in items if item.get('date')]
-        except (KeyError, TypeError) as e:
-            logger.warning(f"Could not fetch dividend dates for {symbol}: {e}")
-            return []
+        return self._fundamentals_dates(
+            symbol,
+            "markets/fundamentals/dividends",
+            "cash_dividends",
+            date_keys=("ex_date", "ex_dividend_date", "date"),
+        )
 
     def get_historical_prices(self, symbol: str, interval: str = "daily", span: str = "month") -> List[Dict[str, Any]]:
         """Fetch historical price data for technical indicators (e.g., 50-day MA)."""
