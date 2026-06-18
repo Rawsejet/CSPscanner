@@ -495,6 +495,23 @@ class TestScannerFiltering:
         finally:
             scanner_module.SP100_TICKERS = original
 
+    def test_return_and_daily_metrics(self):
+        """Period return and $/day sit beside annualized ROC for honest comparison."""
+        # Default mock: strike 140, mid 1.55, DTE 10 (_income_expiry offset).
+        mock_client = self._make_mock_client()
+        scanner = CSPScanner(mock_client)
+        import scanner as scanner_module
+        original = scanner_module.SP100_TICKERS
+        scanner_module.SP100_TICKERS = ["TEST"]
+        try:
+            row = scanner.scan(horizon="Income").iloc[0]
+            assert row["Return %"] == pytest.approx(1.11, abs=0.01)   # 1.55/140
+            assert row["$/Day"] == pytest.approx(15.5, abs=0.01)      # 1.55*100/10
+            # Annualized ROC dwarfs the real period return — the whole point.
+            assert row["ROC"] > row["Return %"] * 30
+        finally:
+            scanner_module.SP100_TICKERS = original
+
     def test_exclude_earnings_drops_known_event(self):
         """exclude_earnings drops a contract whose window holds a known earnings date."""
         mock_client = self._make_mock_client()
