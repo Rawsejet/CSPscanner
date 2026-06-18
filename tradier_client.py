@@ -18,6 +18,10 @@ class TradierAPIError(Exception):
 class TradierClient:
     PRODUCTION_BASE = "https://api.tradier.com/v1"
     SANDBOX_BASE = "https://sandbox.tradier.com/v1"
+    # Beta fundamentals (earnings/dividends) live under /beta, not /v1, and are
+    # production-only — sandbox tokens 404 here, which the scanner treats as
+    # "data unavailable" (flags N/A) rather than "no events".
+    FUNDAMENTALS_BASE = "https://api.tradier.com/beta"
 
     def __init__(self, access_token: str, use_sandbox: bool = False):
         self.access_token = access_token
@@ -27,8 +31,9 @@ class TradierClient:
             "Accept": "application/json"
         }
 
-    def _request(self, endpoint: str, params: Optional[Dict[str, Any]] = None, _retry: int = 0) -> Dict[str, Any]:
-        url = f"{self.base_url}/{endpoint}"
+    def _request(self, endpoint: str, params: Optional[Dict[str, Any]] = None,
+                 _retry: int = 0, base: Optional[str] = None) -> Dict[str, Any]:
+        url = f"{base or self.base_url}/{endpoint}"
         try:
             # Concurrency is bounded by the scanner's thread pool; bursts that hit
             # the rate limit are handled by the 429 retry/backoff below.
@@ -39,7 +44,7 @@ class TradierClient:
                 wait = float(response.headers.get("Retry-After", 2 ** _retry))
                 logger.info(f"Rate limited on {endpoint}, sleeping {wait:.1f}s (retry {_retry + 1}/3)")
                 time.sleep(wait)
-                return self._request(endpoint, params, _retry + 1)
+                return self._request(endpoint, params, _retry + 1, base=base)
 
             response.raise_for_status()
 
@@ -171,16 +176,16 @@ class TradierClient:
         """Pull normalized YYYY-MM-DD dates out of a beta fundamentals response.
 
         The beta fundamentals endpoints return a list of
-        ``{request, type, results: [{tables: {<table>: [ {...}, ... ]}}]}``. The
-        exact field names vary by symbol, so for each row we look across several
-        candidate ``date_keys`` (and one level of nested dicts), optionally gated
-        by ``event_filter``.
+        ``{request, type, results: [{tables: {<table>: [ {...}, ... ]}}]}``,
+        where ``results`` can hold several entries (some with a ``null`` table).
+        For each row we take the first present ``date_keys`` value, optionally
+        gated by ``event_filter``.
 
         Raises TradierAPIError if the request itself fails (e.g. the beta
         fundamentals data isn't entitled on this plan) so the caller can mark the
         data *unavailable* rather than reporting a false "no events".
         """
-        data = self._request(endpoint, {"symbols": symbol})
+        data = self._request(endpoint, {"symbols": symbol}, base=self.FUNDAMENTALS_BASE)
 
         dates: List[str] = []
         try:
@@ -207,18 +212,11 @@ class TradierClient:
         return dates
 
     def _row_date(self, row: Dict[str, Any], date_keys) -> Optional[str]:
-        """First normalizable date found in ``row`` (or one level of nesting)."""
+        """First normalizable date found in ``row`` across ``date_keys``."""
         for key in date_keys:
             norm = self._normalize_date(row.get(key))
             if norm:
                 return norm
-        # Some tables nest the payload, e.g. {"cash_dividend": {"ex_date": ...}}.
-        for val in row.values():
-            if isinstance(val, dict):
-                for key in date_keys:
-                    norm = self._normalize_date(val.get(key))
-                    if norm:
-                        return norm
         return None
 
     def get_earnings_dates(self, symbol: str) -> List[str]:
@@ -232,11 +230,17 @@ class TradierClient:
         Raises TradierAPIError on transport/auth failure so the scanner can
         distinguish "data unavailable" from "no earnings in window".
         """
+        # Tradier's corporate_calendars event_type codes for quarterly earnings:
+        # 7-10 are the results/releases, 12-15 the earnings conference calls.
+        # (Other codes are AGMs=1, conferences=20, annual report=30, etc.) Match
+        # on the code first; some terse older rows ("Q3 2010", "reports first
+        # quarter results") carry an earnings code but no "earnings" in the text.
+        EARNINGS_EVENT_TYPES = {7, 8, 9, 10, 12, 13, 14, 15}
+
         def _is_earnings(row: Dict[str, Any]) -> bool:
-            event = str(row.get("event", "")).lower()
-            # event_type 14/15 are earnings releases in Tradier's data; fall back
-            # to the human-readable event text when the code is absent.
-            return row.get("event_type") in (14, 15) or "earning" in event
+            if row.get("event_type") in EARNINGS_EVENT_TYPES:
+                return True
+            return "earning" in str(row.get("event", "")).lower()
 
         return self._fundamentals_dates(
             symbol,

@@ -125,32 +125,42 @@ class TestFundamentalsParsing:
     """The beta fundamentals calendar replaces the old (wrong) markets/calendar."""
 
     def test_earnings_dates_parsed_and_filtered(self):
+        """Mirrors the real beta shape: multiple results (one null), earnings keyed
+        by event_type 7-10/12-15 even when the text lacks the word 'earnings'."""
         client = TradierClient("fake")
         payload = [
             {"request": "AAPL", "type": "Symbol", "results": [
-                {"type": "Stock", "tables": {"corporate_calendars": [
-                    {"event": "Q3 2026 Earnings Release", "event_type": 14,
-                     "begin_date_time": "2026-06-25T00:00:00"},
-                    {"event": "Annual Shareholders Meeting", "event_type": 7,
-                     "begin_date_time": "2026-09-01T00:00:00"},
+                {"type": "Company", "tables": {"corporate_calendars": None}},
+                {"type": "Company", "tables": {"corporate_calendars": [
+                    {"event": "Apple Inc Third Quarter Earnings Conference Call for 2026",
+                     "event_type": 14, "begin_date_time": "2026-07-31"},
+                    {"event": "Apple reports first quarter results",  # no 'earnings' text
+                     "event_type": 7, "begin_date_time": "2026-01-29"},
+                    {"event": "Apple Inc Annual General Meeting for 2026",
+                     "event_type": 1, "begin_date_time": "2026-02-24"},
+                    {"event": "Morgan Stanley TMT Conference",
+                     "event_type": 20, "begin_date_time": "2026-03-05"},
                 ]}},
             ]},
         ]
         with patch.object(client, "_request", return_value=payload):
-            # Datetime is normalized to a date; the non-earnings event is dropped.
-            assert client.get_earnings_dates("AAPL") == ["2026-06-25"]
+            # Both earnings rows kept (by code), AGM + conference dropped.
+            assert client.get_earnings_dates("AAPL") == ["2026-07-31", "2026-01-29"]
 
-    def test_dividend_dates_parsed_from_nested_row(self):
+    def test_dividend_dates_parsed_from_flat_row(self):
+        """ex_date sits flat on the row; null tables are tolerated."""
         client = TradierClient("fake")
         payload = [
             {"request": "AAPL", "type": "Symbol", "results": [
+                {"type": "Stock", "tables": {"cash_dividends": None}},
                 {"type": "Stock", "tables": {"cash_dividends": [
-                    {"cash_dividend": {"ex_date": "2026-07-10T00:00:00"}},
+                    {"dividend_type": "CD", "ex_date": "2026-05-11", "cash_amount": 0.27},
+                    {"dividend_type": "CD", "ex_date": "2026-02-09", "cash_amount": 0.26},
                 ]}},
             ]},
         ]
         with patch.object(client, "_request", return_value=payload):
-            assert client.get_dividend_dates("AAPL") == ["2026-07-10"]
+            assert client.get_dividend_dates("AAPL") == ["2026-05-11", "2026-02-09"]
 
     def test_fundamentals_error_propagates(self):
         """A failed request must raise so the scanner can mark the data N/A."""
