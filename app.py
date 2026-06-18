@@ -80,6 +80,25 @@ exclude_earnings = st.sidebar.checkbox(
     ),
 )
 
+# Display-only ranking metric. Annualized ROC is mathematically inflated for
+# short expiries (it assumes continuous redeployment), so offer fairer lenses.
+RANK_COLUMNS = {
+    "Annualized ROC": "ROC",
+    "Return % (held to expiry)": "Return %",
+    "$/Day per contract": "$/Day",
+    "Downside cushion %": "Cushion %",
+}
+rank_by = st.sidebar.selectbox(
+    "Rank signals by",
+    list(RANK_COLUMNS),
+    index=0,
+    help=(
+        "Orders the heat map and picks the 'top' signal. Annualized ROC favors "
+        "the shortest expiries; Return % and $/Day compare horizons more "
+        "honestly, and Cushion % ranks safety first. Click Run to apply."
+    ),
+)
+
 st.title("S&P 100 CSP Signal Dashboard")
 st.markdown("Scanning for Low-to-Medium risk Cash Secured Put opportunities.")
 
@@ -159,10 +178,22 @@ if st.button("Run Scanner"):
                         "Try the other horizon (Income vs Classic)."
                     )
         else:
+            # Re-rank by the chosen metric (sort_values returns a new frame, so
+            # the cached scan result is never mutated). Drives the heat map, the
+            # Portfolio Simulation top-N, and the "top signal" risk analysis.
+            df = df.sort_values(RANK_COLUMNS[rank_by], ascending=False).reset_index(drop=True)
+
             st.subheader(f"Identified Signals ({len(df)})")
 
-            # Heat Map Table — sorted by ROC descending
-            st.markdown("### Signal Heat Map")
+            # Heat Map Table — ranked by the selected metric
+            st.markdown(f"### Signal Heat Map · ranked by {rank_by}")
+            st.caption(
+                "**ROC** is *annualized* — it assumes you redeploy this capital at "
+                "the same rate all year, which a 7–14 day trade rarely does without "
+                "a losing cycle. **Return %** is what you actually keep if held to "
+                "expiry; **$/Day** is premium per contract per day (a fair "
+                "income-rate comparison across horizons)."
+            )
 
             def color_strength(val):
                 colors = {"High": "#d4edda", "Medium": "#fff3cd", "Low": "#f8d7da"}

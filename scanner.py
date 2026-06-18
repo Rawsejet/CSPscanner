@@ -289,6 +289,12 @@ class CSPScanner:
                     capital = strike * 100
                     max_loss = breakeven * 100
 
+                    # Honest return framing alongside annualized ROC: the actual
+                    # return if held to expiry (no redeployment assumption), and
+                    # premium $/contract/day for a fair cross-horizon comparison.
+                    period_return = mid / strike * 100
+                    premium_per_day = mid * 100 / dte
+
                     # Technical alignment bonus
                     below_ma50 = strike < ma50 if ma50 else None
 
@@ -302,6 +308,8 @@ class CSPScanner:
                         "DTE": dte,
                         "Premium": round(mid, 2),
                         "ROC": round(roc, 2),
+                        "Return %": round(period_return, 2),
+                        "$/Day": round(premium_per_day, 2),
                         "IV Rank": round(iv_rank, 1) if iv_rank is not None else None,
                         "Delta": round(delta, 3),
                         "Capital": round(capital, 2),
