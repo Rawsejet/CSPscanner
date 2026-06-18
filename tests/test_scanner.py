@@ -121,6 +121,60 @@ class TestTradierClientErrors:
         assert "sandbox" not in client.base_url
 
 
+class TestFundamentalsParsing:
+    """The beta fundamentals calendar replaces the old (wrong) markets/calendar."""
+
+    def test_earnings_dates_parsed_and_filtered(self):
+        """Mirrors the real beta shape: multiple results (one null), earnings keyed
+        by event_type 7-10/12-15 even when the text lacks the word 'earnings'."""
+        client = TradierClient("fake")
+        payload = [
+            {"request": "AAPL", "type": "Symbol", "results": [
+                {"type": "Company", "tables": {"corporate_calendars": None}},
+                {"type": "Company", "tables": {"corporate_calendars": [
+                    {"event": "Apple Inc Third Quarter Earnings Conference Call for 2026",
+                     "event_type": 14, "begin_date_time": "2026-07-31"},
+                    {"event": "Apple reports first quarter results",  # no 'earnings' text
+                     "event_type": 7, "begin_date_time": "2026-01-29"},
+                    {"event": "Apple Inc Annual General Meeting for 2026",
+                     "event_type": 1, "begin_date_time": "2026-02-24"},
+                    {"event": "Morgan Stanley TMT Conference",
+                     "event_type": 20, "begin_date_time": "2026-03-05"},
+                ]}},
+            ]},
+        ]
+        with patch.object(client, "_request", return_value=payload):
+            # Both earnings rows kept (by code), AGM + conference dropped.
+            assert client.get_earnings_dates("AAPL") == ["2026-07-31", "2026-01-29"]
+
+    def test_dividend_dates_parsed_from_flat_row(self):
+        """ex_date sits flat on the row; null tables are tolerated."""
+        client = TradierClient("fake")
+        payload = [
+            {"request": "AAPL", "type": "Symbol", "results": [
+                {"type": "Stock", "tables": {"cash_dividends": None}},
+                {"type": "Stock", "tables": {"cash_dividends": [
+                    {"dividend_type": "CD", "ex_date": "2026-05-11", "cash_amount": 0.27},
+                    {"dividend_type": "CD", "ex_date": "2026-02-09", "cash_amount": 0.26},
+                ]}},
+            ]},
+        ]
+        with patch.object(client, "_request", return_value=payload):
+            assert client.get_dividend_dates("AAPL") == ["2026-05-11", "2026-02-09"]
+
+    def test_fundamentals_error_propagates(self):
+        """A failed request must raise so the scanner can mark the data N/A."""
+        client = TradierClient("fake")
+        with patch.object(client, "_request", side_effect=TradierAPIError("404", 404)):
+            with pytest.raises(TradierAPIError):
+                client.get_earnings_dates("AAPL")
+
+    def test_empty_fundamentals_returns_empty(self):
+        client = TradierClient("fake")
+        with patch.object(client, "_request", return_value=[]):
+            assert client.get_earnings_dates("AAPL") == []
+
+
 # ── scanner.py tests ───────────────────────────────────────────────────────
 
 class TestScannerFiltering:
@@ -421,5 +475,56 @@ class TestScannerFiltering:
             assert diag is not None
             summary = diag.summary()
             assert summary["tickers_scanned"] >= 1
+        finally:
+            scanner_module.SP100_TICKERS = original
+
+    def test_break_even_cushion_capital_columns(self):
+        """Each signal exposes break-even, cushion %, capital, and max loss."""
+        # Default mock: strike 140, bid/ask 1.50/1.60 (mid 1.55), spot 150.
+        mock_client = self._make_mock_client()
+        scanner = CSPScanner(mock_client)
+        import scanner as scanner_module
+        original = scanner_module.SP100_TICKERS
+        scanner_module.SP100_TICKERS = ["TEST"]
+        try:
+            row = scanner.scan(horizon="Income").iloc[0]
+            assert row["Break-even"] == pytest.approx(138.45, abs=0.01)
+            assert row["Cushion %"] == pytest.approx(7.7, abs=0.1)
+            assert row["Capital"] == pytest.approx(14000.0)
+            assert row["Max Loss"] == pytest.approx(13845.0, abs=0.01)
+        finally:
+            scanner_module.SP100_TICKERS = original
+
+    def test_exclude_earnings_drops_known_event(self):
+        """exclude_earnings drops a contract whose window holds a known earnings date."""
+        mock_client = self._make_mock_client()
+        mock_client.get_earnings_dates.return_value = [_income_expiry()]
+        scanner = CSPScanner(mock_client)
+        import scanner as scanner_module
+        original = scanner_module.SP100_TICKERS
+        scanner_module.SP100_TICKERS = ["TEST"]
+        try:
+            assert scanner.scan(horizon="Income", exclude_earnings=True).empty
+            kept = scanner.scan(horizon="Income", exclude_earnings=False)
+            assert len(kept) == 1
+            assert kept.iloc[0]["Earnings Warning"] == "YES"
+        finally:
+            scanner_module.SP100_TICKERS = original
+
+    def test_unavailable_fundamentals_flag_na_not_no(self):
+        """If earnings data can't be fetched, flag N/A (never a false 'NO')."""
+        mock_client = self._make_mock_client()
+        mock_client.get_earnings_dates.side_effect = TradierAPIError("not entitled", 404)
+        scanner = CSPScanner(mock_client)
+        import scanner as scanner_module
+        original = scanner_module.SP100_TICKERS
+        scanner_module.SP100_TICKERS = ["TEST"]
+        try:
+            # Even with exclude on, an N/A contract is kept (unknown != has-earnings).
+            df = scanner.scan(horizon="Income", exclude_earnings=True)
+            assert len(df) == 1
+            assert df.iloc[0]["Earnings Warning"] == "N/A"
+            assert df.iloc[0]["Dividend Warning"] == "N/A"
+            assert df.attrs["diagnostics"].summary()["fundamentals_unavailable"] == 1
         finally:
             scanner_module.SP100_TICKERS = original
