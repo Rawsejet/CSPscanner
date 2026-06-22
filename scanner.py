@@ -5,17 +5,34 @@ from typing import List, Dict, Any, Optional, Tuple
 from tradier_client import TradierClient, TradierAPIError
 from utils import calculate_annualized_roc, calculate_iv_rank, get_date_range, is_date_between
 
-# S&P 100 Tickers
-SP100_TICKERS = [
-    "AAPL", "MSFT", "AMZN", "NVDA", "GOOGL", "GOOG", "META", "BRK.B", "TSLA", "V",
-    "JPM", "UNH", "MA", "JNJ", "AVGO", "HD", "PG", "COST", "ORCL", "ADBE",
-    "MRK", "XOM", "CVX", "ABBV", "LLY", "PEP", "MCD", "TMO", "ACN", "ABT",
-    "LIN", "CSCO", "WMT", "CRM", "DHR", "NEE", "BMY", "RTX", "TXN", "QCOM",
-    "HON", "UNP", "PM", "UPS", "LOW", "AMT", "SPGI", "INTU", "BKNG", "CAT",
-    "GS", "BLK", "ISRG", "MDLZ", "GILD", "MMM", "AXP", "SYK", "DE", "CI",
-    "MO", "ZTS", "TJX", "CB", "BK", "SCHW", "SO", "PLD", "USB", "DUK",
-    "BDX", "TGT", "COF", "ITW", "NSC", "APD", "EMR", "AMD", "SHW", "EQIX",
-    "AON", "CL", "GD", "WM", "ICE", "GM", "F", "NKE", "ADI", "LRCX", "SPCX"
+# Scan universe: the S&P 100 unioned with the Nasdaq-100 (duplicates removed),
+# plus the leveraged QQQ ETFs (TQQQ/SQQQ) and a couple of explicit extras
+# (SPCX, F). DIS is already an S&P 100 member, so it is covered below.
+# Index constituents verified June 2026 (e.g. the BK -> BNY ticker change
+# effective 2026-05-21).
+SCAN_UNIVERSE = [
+    # --- S&P 100 ---
+    "AAPL", "ABBV", "ABT", "ACN", "ADBE", "AMAT", "AMD", "AMGN", "AMT", "AMZN",
+    "AVGO", "AXP", "BA", "BAC", "BKNG", "BLK", "BMY", "BNY", "BRK.B", "C",
+    "CAT", "CL", "CMCSA", "COF", "COP", "COST", "CRM", "CSCO", "CVS", "CVX",
+    "DE", "DHR", "DIS", "DUK", "EMR", "FDX", "GD", "GE", "GEV", "GILD",
+    "GM", "GOOG", "GOOGL", "GS", "HD", "HON", "IBM", "INTC", "INTU", "ISRG",
+    "JNJ", "JPM", "KO", "LIN", "LLY", "LMT", "LOW", "LRCX", "MA", "MCD",
+    "MDLZ", "MDT", "META", "MMM", "MO", "MRK", "MS", "MSFT", "MU", "NEE",
+    "NFLX", "NKE", "NOW", "NVDA", "ORCL", "PEP", "PFE", "PG", "PLTR", "PM",
+    "QCOM", "RTX", "SBUX", "SCHW", "SO", "SPG", "T", "TMO", "TMUS", "TSLA",
+    "TXN", "UBER", "UNH", "UNP", "UPS", "USB", "V", "VZ", "WFC", "WMT",
+    "XOM",
+    # --- Nasdaq-100 (not already in the S&P 100 above) ---
+    "ABNB", "ADI", "ADP", "ADSK", "AEP", "ALNY", "APP", "ARM", "ASML", "AXON",
+    "BKR", "CCEP", "CDNS", "CEG", "CHTR", "CPRT", "CRWD", "CSX", "CTAS", "CTSH",
+    "DASH", "DDOG", "DXCM", "EA", "EXC", "FANG", "FAST", "FER", "FTNT", "GEHC",
+    "IDXX", "INSM", "KDP", "KHC", "KLAC", "LITE", "MAR", "MCHP", "MELI", "MNST",
+    "MPWR", "MRVL", "MSTR", "NXPI", "ODFL", "ORLY", "PANW", "PAYX", "PCAR", "PDD",
+    "PYPL", "REGN", "ROP", "ROST", "SHOP", "SNDK", "SNPS", "STX", "TRI", "TTWO",
+    "VRSK", "VRTX", "WBD", "WDAY", "WDC", "XEL", "ZS",
+    # --- Leveraged QQQ ETFs + explicit extras ---
+    "TQQQ", "SQQQ", "SPCX", "F",
 ]
 
 
@@ -87,7 +104,7 @@ class CSPScanner:
         """
         Scans the universe for CSP signals.
         horizon: "Income" (7-14 days) or "Classic" (30-45 days)
-        tickers: optional override list; defaults to SP100_TICKERS
+        tickers: optional override list; defaults to SCAN_UNIVERSE
         max_spread_pct: max bid-ask spread as fraction of mid-price (default 15%)
         min_iv_rank: minimum (realized-vol proxy) IV Rank, 0-100. Contracts whose
             underlying ranks below this are rejected so we don't sell "cheap"
@@ -106,7 +123,7 @@ class CSPScanner:
             start_days, end_days = 30, 45
 
         target_start, target_end = get_date_range(start_days, end_days)
-        universe = tickers or SP100_TICKERS
+        universe = tickers or SCAN_UNIVERSE
 
         signals: List[Dict[str, Any]] = []
         diag = ScanDiagnostics()

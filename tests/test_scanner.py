@@ -209,15 +209,15 @@ class TestScannerFiltering:
         scanner = CSPScanner(mock_client)
 
         import scanner as scanner_module
-        original = scanner_module.SP100_TICKERS
-        scanner_module.SP100_TICKERS = ["TEST"]
+        original = scanner_module.SCAN_UNIVERSE
+        scanner_module.SCAN_UNIVERSE = ["TEST"]
         try:
             df = scanner.scan(horizon="Income")
             assert len(df) == 1
             assert df.iloc[0]["Ticker"] == "TEST"
             assert df.iloc[0]["Strike"] == 140.0
         finally:
-            scanner_module.SP100_TICKERS = original
+            scanner_module.SCAN_UNIVERSE = original
 
     def test_delta_too_negative_rejected(self):
         """Delta -0.40 is outside -0.25..-0.10 range."""
@@ -233,13 +233,13 @@ class TestScannerFiltering:
         ]
         scanner = CSPScanner(mock_client)
         import scanner as scanner_module
-        original = scanner_module.SP100_TICKERS
-        scanner_module.SP100_TICKERS = ["TEST"]
+        original = scanner_module.SCAN_UNIVERSE
+        scanner_module.SCAN_UNIVERSE = ["TEST"]
         try:
             df = scanner.scan(horizon="Income")
             assert df.empty
         finally:
-            scanner_module.SP100_TICKERS = original
+            scanner_module.SCAN_UNIVERSE = original
 
     def test_delta_too_small_rejected(self):
         """Delta -0.05 is outside -0.25..-0.10 range."""
@@ -255,13 +255,13 @@ class TestScannerFiltering:
         ]
         scanner = CSPScanner(mock_client)
         import scanner as scanner_module
-        original = scanner_module.SP100_TICKERS
-        scanner_module.SP100_TICKERS = ["TEST"]
+        original = scanner_module.SCAN_UNIVERSE
+        scanner_module.SCAN_UNIVERSE = ["TEST"]
         try:
             df = scanner.scan(horizon="Income")
             assert df.empty
         finally:
-            scanner_module.SP100_TICKERS = original
+            scanner_module.SCAN_UNIVERSE = original
 
     def test_missing_greeks_rejected(self):
         """A contract with no greeks dict must be skipped, not fall back to -0.20."""
@@ -277,13 +277,13 @@ class TestScannerFiltering:
         ]
         scanner = CSPScanner(mock_client)
         import scanner as scanner_module
-        original = scanner_module.SP100_TICKERS
-        scanner_module.SP100_TICKERS = ["TEST"]
+        original = scanner_module.SCAN_UNIVERSE
+        scanner_module.SCAN_UNIVERSE = ["TEST"]
         try:
             df = scanner.scan(horizon="Income")
             assert df.empty
         finally:
-            scanner_module.SP100_TICKERS = original
+            scanner_module.SCAN_UNIVERSE = original
 
     def test_zero_bid_rejected(self):
         """A contract with bid=0 has no real market; skip it."""
@@ -299,13 +299,13 @@ class TestScannerFiltering:
         ]
         scanner = CSPScanner(mock_client)
         import scanner as scanner_module
-        original = scanner_module.SP100_TICKERS
-        scanner_module.SP100_TICKERS = ["TEST"]
+        original = scanner_module.SCAN_UNIVERSE
+        scanner_module.SCAN_UNIVERSE = ["TEST"]
         try:
             df = scanner.scan(horizon="Income")
             assert df.empty
         finally:
-            scanner_module.SP100_TICKERS = original
+            scanner_module.SCAN_UNIVERSE = original
 
     def test_wide_spread_rejected(self):
         """Spread wider than max_spread_pct of mid-price is rejected (default 15%)."""
@@ -321,13 +321,13 @@ class TestScannerFiltering:
         ]
         scanner = CSPScanner(mock_client)
         import scanner as scanner_module
-        original = scanner_module.SP100_TICKERS
-        scanner_module.SP100_TICKERS = ["TEST"]
+        original = scanner_module.SCAN_UNIVERSE
+        scanner_module.SCAN_UNIVERSE = ["TEST"]
         try:
             df = scanner.scan(horizon="Income")
             assert df.empty
         finally:
-            scanner_module.SP100_TICKERS = original
+            scanner_module.SCAN_UNIVERSE = original
 
     def test_itm_strike_rejected(self):
         """Strike >= spot is ATM/ITM, rejected for OTM filter."""
@@ -343,13 +343,13 @@ class TestScannerFiltering:
         ]
         scanner = CSPScanner(mock_client)
         import scanner as scanner_module
-        original = scanner_module.SP100_TICKERS
-        scanner_module.SP100_TICKERS = ["TEST"]
+        original = scanner_module.SCAN_UNIVERSE
+        scanner_module.SCAN_UNIVERSE = ["TEST"]
         try:
             df = scanner.scan(horizon="Income")
             assert df.empty
         finally:
-            scanner_module.SP100_TICKERS = original
+            scanner_module.SCAN_UNIVERSE = original
 
     def test_low_iv_rank_rejected(self):
         """A valid put on a ticker with low IV Rank should be filtered out."""
@@ -357,13 +357,13 @@ class TestScannerFiltering:
         mock_client.get_historical_prices.return_value = _vol_then_calm_history()
         scanner = CSPScanner(mock_client)
         import scanner as scanner_module
-        original = scanner_module.SP100_TICKERS
-        scanner_module.SP100_TICKERS = ["TEST"]
+        original = scanner_module.SCAN_UNIVERSE
+        scanner_module.SCAN_UNIVERSE = ["TEST"]
         try:
             df = scanner.scan(horizon="Income", min_iv_rank=20)
             assert df.empty
         finally:
-            scanner_module.SP100_TICKERS = original
+            scanner_module.SCAN_UNIVERSE = original
 
     def test_high_iv_rank_passes(self):
         """A valid put on a ticker with high IV Rank survives and reports the rank."""
@@ -371,28 +371,28 @@ class TestScannerFiltering:
         mock_client.get_historical_prices.return_value = _calm_then_vol_history()
         scanner = CSPScanner(mock_client)
         import scanner as scanner_module
-        original = scanner_module.SP100_TICKERS
-        scanner_module.SP100_TICKERS = ["TEST"]
+        original = scanner_module.SCAN_UNIVERSE
+        scanner_module.SCAN_UNIVERSE = ["TEST"]
         try:
             df = scanner.scan(horizon="Income", min_iv_rank=20)
             assert len(df) == 1
             assert df.iloc[0]["IV Rank"] > 20
         finally:
-            scanner_module.SP100_TICKERS = original
+            scanner_module.SCAN_UNIVERSE = original
 
     def test_uncomputable_iv_rank_not_filtered(self):
         """When IV Rank can't be computed (flat history), don't filter the contract."""
         mock_client = self._make_mock_client()  # default history is constant
         scanner = CSPScanner(mock_client)
         import scanner as scanner_module
-        original = scanner_module.SP100_TICKERS
-        scanner_module.SP100_TICKERS = ["TEST"]
+        original = scanner_module.SCAN_UNIVERSE
+        scanner_module.SCAN_UNIVERSE = ["TEST"]
         try:
             df = scanner.scan(horizon="Income", min_iv_rank=20)
             assert len(df) == 1
             assert pd.isna(df.iloc[0]["IV Rank"])
         finally:
-            scanner_module.SP100_TICKERS = original
+            scanner_module.SCAN_UNIVERSE = original
 
     def test_signal_strength_levels(self):
         """Signal Strength should be Low/Medium/High per SPEC.md."""
@@ -417,14 +417,14 @@ class TestScannerFiltering:
 
         scanner = CSPScanner(mock_client)
         import scanner as scanner_module
-        original = scanner_module.SP100_TICKERS
-        scanner_module.SP100_TICKERS = ["TEST"]
+        original = scanner_module.SCAN_UNIVERSE
+        scanner_module.SCAN_UNIVERSE = ["TEST"]
         try:
             df = scanner.scan(horizon="Income")
             assert len(df) == 1
             assert df.iloc[0]["Earnings Warning"] == "YES"
         finally:
-            scanner_module.SP100_TICKERS = original
+            scanner_module.SCAN_UNIVERSE = original
 
     def test_results_sorted_by_roc_desc(self):
         """Results should be sorted by ROC descending."""
@@ -451,8 +451,8 @@ class TestScannerFiltering:
         ]
         scanner = CSPScanner(mock)
         import scanner as scanner_module
-        original = scanner_module.SP100_TICKERS
-        scanner_module.SP100_TICKERS = ["TEST"]
+        original = scanner_module.SCAN_UNIVERSE
+        scanner_module.SCAN_UNIVERSE = ["TEST"]
         try:
             df = scanner.scan(horizon="Income")
             assert len(df) == 2, f"Expected 2 signals, got {len(df)}"
@@ -460,15 +460,15 @@ class TestScannerFiltering:
                 f"Expected ROC desc: {df.iloc[0]['ROC']} >= {df.iloc[1]['ROC']}"
             assert df.iloc[0]["Strike"] == 140.0  # Higher ROC put first
         finally:
-            scanner_module.SP100_TICKERS = original
+            scanner_module.SCAN_UNIVERSE = original
 
     def test_diagnostics_attached(self):
         """Scan should attach diagnostics to the DataFrame."""
         mock_client = self._make_mock_client()
         scanner = CSPScanner(mock_client)
         import scanner as scanner_module
-        original = scanner_module.SP100_TICKERS
-        scanner_module.SP100_TICKERS = ["TEST"]
+        original = scanner_module.SCAN_UNIVERSE
+        scanner_module.SCAN_UNIVERSE = ["TEST"]
         try:
             df = scanner.scan(horizon="Income")
             diag = df.attrs.get('diagnostics')
@@ -476,7 +476,7 @@ class TestScannerFiltering:
             summary = diag.summary()
             assert summary["tickers_scanned"] >= 1
         finally:
-            scanner_module.SP100_TICKERS = original
+            scanner_module.SCAN_UNIVERSE = original
 
     def test_break_even_cushion_capital_columns(self):
         """Each signal exposes break-even, cushion %, capital, and max loss."""
@@ -484,8 +484,8 @@ class TestScannerFiltering:
         mock_client = self._make_mock_client()
         scanner = CSPScanner(mock_client)
         import scanner as scanner_module
-        original = scanner_module.SP100_TICKERS
-        scanner_module.SP100_TICKERS = ["TEST"]
+        original = scanner_module.SCAN_UNIVERSE
+        scanner_module.SCAN_UNIVERSE = ["TEST"]
         try:
             row = scanner.scan(horizon="Income").iloc[0]
             assert row["Break-even"] == pytest.approx(138.45, abs=0.01)
@@ -493,7 +493,7 @@ class TestScannerFiltering:
             assert row["Capital"] == pytest.approx(14000.0)
             assert row["Max Loss"] == pytest.approx(13845.0, abs=0.01)
         finally:
-            scanner_module.SP100_TICKERS = original
+            scanner_module.SCAN_UNIVERSE = original
 
     def test_return_and_daily_metrics(self):
         """Period return and $/day sit beside annualized ROC for honest comparison."""
@@ -501,8 +501,8 @@ class TestScannerFiltering:
         mock_client = self._make_mock_client()
         scanner = CSPScanner(mock_client)
         import scanner as scanner_module
-        original = scanner_module.SP100_TICKERS
-        scanner_module.SP100_TICKERS = ["TEST"]
+        original = scanner_module.SCAN_UNIVERSE
+        scanner_module.SCAN_UNIVERSE = ["TEST"]
         try:
             row = scanner.scan(horizon="Income").iloc[0]
             assert row["Return %"] == pytest.approx(1.11, abs=0.01)   # 1.55/140
@@ -510,7 +510,7 @@ class TestScannerFiltering:
             # Annualized ROC dwarfs the real period return — the whole point.
             assert row["ROC"] > row["Return %"] * 30
         finally:
-            scanner_module.SP100_TICKERS = original
+            scanner_module.SCAN_UNIVERSE = original
 
     def test_exclude_earnings_drops_known_event(self):
         """exclude_earnings drops a contract whose window holds a known earnings date."""
@@ -518,15 +518,15 @@ class TestScannerFiltering:
         mock_client.get_earnings_dates.return_value = [_income_expiry()]
         scanner = CSPScanner(mock_client)
         import scanner as scanner_module
-        original = scanner_module.SP100_TICKERS
-        scanner_module.SP100_TICKERS = ["TEST"]
+        original = scanner_module.SCAN_UNIVERSE
+        scanner_module.SCAN_UNIVERSE = ["TEST"]
         try:
             assert scanner.scan(horizon="Income", exclude_earnings=True).empty
             kept = scanner.scan(horizon="Income", exclude_earnings=False)
             assert len(kept) == 1
             assert kept.iloc[0]["Earnings Warning"] == "YES"
         finally:
-            scanner_module.SP100_TICKERS = original
+            scanner_module.SCAN_UNIVERSE = original
 
     def test_unavailable_fundamentals_flag_na_not_no(self):
         """If earnings data can't be fetched, flag N/A (never a false 'NO')."""
@@ -534,8 +534,8 @@ class TestScannerFiltering:
         mock_client.get_earnings_dates.side_effect = TradierAPIError("not entitled", 404)
         scanner = CSPScanner(mock_client)
         import scanner as scanner_module
-        original = scanner_module.SP100_TICKERS
-        scanner_module.SP100_TICKERS = ["TEST"]
+        original = scanner_module.SCAN_UNIVERSE
+        scanner_module.SCAN_UNIVERSE = ["TEST"]
         try:
             # Even with exclude on, an N/A contract is kept (unknown != has-earnings).
             df = scanner.scan(horizon="Income", exclude_earnings=True)
@@ -544,4 +544,4 @@ class TestScannerFiltering:
             assert df.iloc[0]["Dividend Warning"] == "N/A"
             assert df.attrs["diagnostics"].summary()["fundamentals_unavailable"] == 1
         finally:
-            scanner_module.SP100_TICKERS = original
+            scanner_module.SCAN_UNIVERSE = original
