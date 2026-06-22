@@ -54,6 +54,7 @@ class ScanDiagnostics:
         self.rejected_missing_fields = 0
         self.rejected_iv_rank = 0
         self.rejected_earnings = 0
+        self.rejected_capital = 0
         self.fundamentals_unavailable = 0
         self.api_errors: List[str] = []
 
@@ -63,7 +64,7 @@ class ScanDiagnostics:
         "chains_fetched", "contracts_evaluated", "rejected_no_greeks",
         "rejected_missing_fields", "rejected_delta", "rejected_zero_bid",
         "rejected_spread", "rejected_roc", "rejected_otm", "rejected_iv_rank",
-        "rejected_earnings", "fundamentals_unavailable",
+        "rejected_earnings", "rejected_capital", "fundamentals_unavailable",
     )
 
     def merge(self, other: "ScanDiagnostics") -> None:
@@ -89,6 +90,7 @@ class ScanDiagnostics:
             "rejected_otm": self.rejected_otm,
             "rejected_iv_rank": self.rejected_iv_rank,
             "rejected_earnings": self.rejected_earnings,
+            "rejected_capital": self.rejected_capital,
             "fundamentals_unavailable": self.fundamentals_unavailable,
             "api_errors": len(self.api_errors),
         }
@@ -100,12 +102,16 @@ class CSPScanner:
 
     def scan(self, horizon: str = "Income", tickers: Optional[List[str]] = None,
              max_spread_pct: float = 0.15, min_iv_rank: float = 20.0,
-             exclude_earnings: bool = False, max_workers: int = 8) -> pd.DataFrame:
+             exclude_earnings: bool = False, max_capital: Optional[float] = None,
+             max_workers: int = 8) -> pd.DataFrame:
         """
         Scans the universe for CSP signals.
         horizon: "Income" (7-14 days) or "Classic" (30-45 days)
         tickers: optional override list; defaults to SCAN_UNIVERSE
         max_spread_pct: max bid-ask spread as fraction of mid-price (default 15%)
+        max_capital: optional ceiling on the cash-secured collateral (strike * 100)
+            for a single contract. Contracts you couldn't fully secure are dropped
+            so you only see CSPs you can actually afford. None = no capital limit.
         min_iv_rank: minimum (realized-vol proxy) IV Rank, 0-100. Contracts whose
             underlying ranks below this are rejected so we don't sell "cheap"
             premium. Tickers whose IV Rank can't be computed are not filtered out.
@@ -133,7 +139,7 @@ class CSPScanner:
                 executor.submit(
                     self._scan_ticker, ticker, horizon,
                     target_start, target_end, max_spread_pct, min_iv_rank,
-                    exclude_earnings
+                    exclude_earnings, max_capital
                 ): ticker
                 for ticker in universe
             }
@@ -156,7 +162,7 @@ class CSPScanner:
 
     def _scan_ticker(self, ticker: str, horizon: str, target_start, target_end,
                      max_spread_pct: float, min_iv_rank: float = 20.0,
-                     exclude_earnings: bool = False
+                     exclude_earnings: bool = False, max_capital: Optional[float] = None
                      ) -> Tuple[List[Dict[str, Any]], ScanDiagnostics]:
         """Scan a single ticker. Returns (signals, per-ticker diagnostics).
 
@@ -241,6 +247,13 @@ class CSPScanner:
                     # Skip if any essential pricing field is missing
                     if strike is None or bid is None or ask is None:
                         diag.rejected_missing_fields += 1
+                        continue
+
+                    # Affordability gate: a cash-secured put ties up strike * 100
+                    # in collateral. With a capital ceiling, drop anything the user
+                    # can't fully secure before doing the costlier greeks/ROC work.
+                    if max_capital is not None and strike * 100 > max_capital:
+                        diag.rejected_capital += 1
                         continue
 
                     # Zero-bid: no real market, skip

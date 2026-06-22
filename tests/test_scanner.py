@@ -263,6 +263,47 @@ class TestScannerFiltering:
         finally:
             scanner_module.SCAN_UNIVERSE = original
 
+    def test_capital_ceiling_rejects_unaffordable(self):
+        """Strike 140 ties up $14k of collateral; a $10k ceiling must hide it."""
+        mock_client = self._make_mock_client()
+        scanner = CSPScanner(mock_client)
+        import scanner as scanner_module
+        original = scanner_module.SCAN_UNIVERSE
+        scanner_module.SCAN_UNIVERSE = ["TEST"]
+        try:
+            df = scanner.scan(horizon="Income", max_capital=10_000)
+            assert df.empty
+            assert df.attrs["diagnostics"].rejected_capital == 1
+        finally:
+            scanner_module.SCAN_UNIVERSE = original
+
+    def test_capital_ceiling_allows_affordable(self):
+        """A $15k ceiling clears the $14k collateral, so the put survives."""
+        mock_client = self._make_mock_client()
+        scanner = CSPScanner(mock_client)
+        import scanner as scanner_module
+        original = scanner_module.SCAN_UNIVERSE
+        scanner_module.SCAN_UNIVERSE = ["TEST"]
+        try:
+            df = scanner.scan(horizon="Income", max_capital=15_000)
+            assert len(df) == 1
+            assert df.iloc[0]["Capital"] == 14_000
+        finally:
+            scanner_module.SCAN_UNIVERSE = original
+
+    def test_capital_ceiling_boundary_is_inclusive(self):
+        """Collateral exactly equal to the ceiling is affordable, so it passes."""
+        mock_client = self._make_mock_client()
+        scanner = CSPScanner(mock_client)
+        import scanner as scanner_module
+        original = scanner_module.SCAN_UNIVERSE
+        scanner_module.SCAN_UNIVERSE = ["TEST"]
+        try:
+            df = scanner.scan(horizon="Income", max_capital=14_000)
+            assert len(df) == 1
+        finally:
+            scanner_module.SCAN_UNIVERSE = original
+
     def test_missing_greeks_rejected(self):
         """A contract with no greeks dict must be skipped, not fall back to -0.20."""
         mock_client = self._make_mock_client()

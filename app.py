@@ -12,10 +12,11 @@ st.set_page_config(page_title="S&P 100 CSP Signal Dashboard", layout="wide")
 
 @st.cache_data(ttl=300, show_spinner=False)
 def run_scan(api_key: str, use_sandbox: bool, horizon_key: str,
-             max_spread_pct: float, min_iv_rank: float, exclude_earnings: bool):
+             max_spread_pct: float, min_iv_rank: float, exclude_earnings: bool,
+             max_capital: float):
     """Run a scan, caching results for 5 minutes to avoid hammering the API.
 
-    Cached on (token, env, horizon, spread, IV rank, exclude-earnings):
+    Cached on (token, env, horizon, spread, IV rank, exclude-earnings, capital):
     re-clicking Run with the same settings is instant and costs no API credits.
     Returns (DataFrame, diagnostics summary dict); the custom diagnostics object
     is stripped so the result caches cleanly.
@@ -27,6 +28,7 @@ def run_scan(api_key: str, use_sandbox: bool, horizon_key: str,
         max_spread_pct=max_spread_pct,
         min_iv_rank=min_iv_rank,
         exclude_earnings=exclude_earnings,
+        max_capital=max_capital,
     )
     diag = df.attrs.pop("diagnostics", None)
     return df, (diag.summary() if diag else None)
@@ -47,7 +49,12 @@ api_key = st.sidebar.text_input(
     type="password",
 )
 available_cash = st.sidebar.number_input(
-    "Available Cash ($)", min_value=1000, value=10000, step=1000
+    "Available Cash ($)", min_value=1000, value=10000, step=1000,
+    help=(
+        "Your cash-secured buying power. Any CSP whose collateral (strike × 100) "
+        "exceeds this is hidden — you only see puts you can fully secure. The same "
+        "figure sizes the Portfolio Simulation below."
+    ),
 )
 max_spread = st.sidebar.slider(
     "Max Bid-Ask Spread (%)",
@@ -117,7 +124,7 @@ horizon_key = "Income" if "Income" in horizon else "Classic"
 if st.button("Run Scanner"):
     with st.spinner(f"Scanning S&P 100 for {horizon_key} signals..."):
         try:
-            df, diag = run_scan(api_key, use_sandbox, horizon_key, max_spread / 100, min_iv_rank, exclude_earnings)
+            df, diag = run_scan(api_key, use_sandbox, horizon_key, max_spread / 100, min_iv_rank, exclude_earnings, available_cash)
         except TradierAPIError as e:
             st.error(f"API Error: {e}")
             if e.status_code in (401, 403):
@@ -149,6 +156,7 @@ if st.button("Run Scanner"):
                     "Low IV Rank": s["rejected_iv_rank"],
                     "Not OTM": s["rejected_otm"],
                     "Earnings in Window": s["rejected_earnings"],
+                    "Exceeds Capital": s["rejected_capital"],
                 }
                 st.write("**Rejection breakdown:**")
                 rej_df = pd.DataFrame(list(rejections.items()), columns=["Reason", "Count"])
