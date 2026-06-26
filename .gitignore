@@ -62,3 +62,4 @@ Thumbs.db
 # Project-specific
 *.log
 token.json
+ic_positions.json

@@ -3,7 +3,9 @@ import pandas as pd
 from tradier_client import TradierClient, TradierAPIError
 from scanner import CSPScanner
 from iron_condor import ICScanner
+from positions import load_positions, add_position, remove_position, evaluate_position
 import os
+import json
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -53,6 +55,18 @@ def run_ic_scan(api_key: str, use_sandbox: bool, short_delta: float,
     )
     diag = df.attrs.pop("diagnostics", None)
     return df, (diag.summary() if diag else None)
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def evaluate_positions_cached(api_key: str, use_sandbox: bool, positions_key: str):
+    """Live status for all tracked condors (cached 60s; the Refresh button clears it).
+
+    ``positions_key`` is the positions list JSON-encoded so it is hashable for the
+    cache — avoids re-pulling chains on every unrelated Streamlit rerun.
+    """
+    pos_list = json.loads(positions_key)
+    client = TradierClient(api_key, use_sandbox=use_sandbox)
+    return [evaluate_position(client, p) for p in pos_list]
 
 
 # Sidebar Configuration (shared auth + CSP settings)
@@ -314,6 +328,9 @@ with tab_csp:
 
 
 with tab_ic:
+    ic_find, ic_track = st.tabs(["Find Entries", "My Condors"])
+
+with ic_find:
     st.markdown("### Weekly Iron Condor — entry finder")
     st.caption(
         "Sells far-OTM weekly condors ranked by **real edge** — the variance risk "
@@ -463,8 +480,95 @@ with tab_ic:
                 use_container_width=True,
             )
             st.caption(
-                "Next: **My Condors** live position tracking (50%-profit, tested-side roll, and "
-                "time/gamma triggers) lands in the next build phase."
+                "Track any of these once you've opened them in the **My Condors** tab for "
+                "live P&L and management triggers."
             )
     else:
         st.info("Set your parameters and click 'Scan Iron Condors'.")
+
+
+with ic_track:
+    st.markdown("### My Condors — live tracking")
+    st.caption(
+        "Enter the condors you've opened; each refresh re-pulls the live chain and "
+        "flags the triggers you use: take profit at 50% of credit, defend the tested "
+        "side at Δ≈0.30, and close into the last day(s) to dodge gamma. Stored locally "
+        "in ic_positions.json (gitignored)."
+    )
+
+    with st.expander("➕ Add an open condor"):
+        with st.form("add_condor", clear_on_submit=True):
+            f1, f2, f3 = st.columns(3)
+            add_ticker = f1.text_input("Ticker").strip().upper()
+            add_expiry = f2.text_input("Expiry (YYYY-MM-DD)").strip()
+            add_qty = f3.number_input("Contracts", min_value=1, value=1, step=1)
+            g1, g2, g3, g4 = st.columns(4)
+            add_lp = g1.number_input("Long put", min_value=0.0, value=0.0, step=0.5)
+            add_sp = g2.number_input("Short put", min_value=0.0, value=0.0, step=0.5)
+            add_sc = g3.number_input("Short call", min_value=0.0, value=0.0, step=0.5)
+            add_lc = g4.number_input("Long call", min_value=0.0, value=0.0, step=0.5)
+            add_credit = st.number_input(
+                "Entry credit received (per share)", min_value=0.0, value=0.0, step=0.05)
+            if st.form_submit_button("Add position"):
+                if add_ticker and add_expiry and add_lp < add_sp < add_sc < add_lc and add_credit > 0:
+                    add_position({
+                        "ticker": add_ticker, "expiry": add_expiry, "quantity": int(add_qty),
+                        "long_put_strike": add_lp, "short_put_strike": add_sp,
+                        "short_call_strike": add_sc, "long_call_strike": add_lc,
+                        "entry_credit": float(add_credit),
+                    })
+                    st.success(f"Added {add_ticker} {add_sp:g}/{add_sc:g} condor.")
+                else:
+                    st.error(
+                        "Need a ticker, expiry, a valid ladder "
+                        "(long put < short put < short call < long call), and a positive credit."
+                    )
+
+    pos_list = load_positions()
+    if not pos_list:
+        st.info("No open condors tracked yet — add one above.")
+    else:
+        if st.button("🔄 Refresh live status"):
+            evaluate_positions_cached.clear()
+        statuses = evaluate_positions_cached(
+            api_key, use_sandbox, json.dumps(pos_list, sort_keys=True))
+
+        for status, pos in zip(statuses, pos_list):
+            ladder = (f"{pos['long_put_strike']:g}/{pos['short_put_strike']:g}.."
+                      f"{pos['short_call_strike']:g}/{pos['long_call_strike']:g}")
+            if status.get("error"):
+                st.warning(f"**{pos['ticker']}** {pos['expiry']} ({ladder}): {status['error']}")
+                if st.button("Remove", key=f"rm_{pos['id']}"):
+                    remove_position(pos["id"])
+                    st.rerun()
+                st.divider()
+                continue
+
+            qty = status["quantity"]
+            c1, c2, c3, c4 = st.columns([2, 1, 1, 1])
+            c1.markdown(f"**{status['ticker']}** · {ladder} · {status['dte']}DTE · {qty}x")
+            pl, plp = status["pl_dollars"], status["pl_pct"]
+            c2.metric(
+                "Open P&L", f"${pl:,.0f}" if pl is not None else "—",
+                f"{plp:+.0f}%" if plp is not None else None,
+            )
+            c3.metric(
+                "Buy-back (mid)", f"${status['value_mid'] * 100 * qty:,.0f}",
+                help=f"Debit to close now. At-market (natural): "
+                     f"${status['value_natural'] * 100 * qty:,.0f}.",
+            )
+            dp, dc = status["short_put_delta"], status["short_call_delta"]
+            c4.metric(
+                "Short Δ p/c",
+                f"{dp:.2f}/{dc:.2f}" if (dp is not None and dc is not None) else "—",
+            )
+
+            if status["triggers"]:
+                for tmsg in status["triggers"]:
+                    st.warning("⚠️ " + tmsg)
+            else:
+                st.caption("No active triggers — holding.")
+            if st.button("Remove", key=f"rm_{pos['id']}"):
+                remove_position(pos["id"])
+                st.rerun()
+            st.divider()
