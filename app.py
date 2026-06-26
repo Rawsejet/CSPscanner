@@ -392,6 +392,15 @@ with ic_find:
                         "selector (Sandbox vs Production)."
                     )
                 st.stop()
+        # Persist results so re-ranking and the quick-add button don't re-scan.
+        st.session_state["ic_results"] = ic_df
+        st.session_state["ic_diag"] = ic_diag
+
+    if "ic_results" not in st.session_state:
+        st.info("Set your parameters and click 'Scan Iron Condors'.")
+    else:
+        ic_df = st.session_state["ic_results"]
+        ic_diag = st.session_state["ic_diag"]
 
         if ic_diag:
             with st.expander("Scan Diagnostics"):
@@ -479,12 +488,42 @@ with ic_find:
                 ic_df.style.map(color_grade, subset=["Grade"]).map(color_vrp, subset=["VRP"]),
                 use_container_width=True,
             )
+            # Quick-add a scanned condor into the tracker (does NOT place an order).
+            st.markdown("**➕ Quick-add to My Condors**")
             st.caption(
-                "Track any of these once you've opened them in the **My Condors** tab for "
-                "live P&L and management triggers."
+                "Copies the strikes and mid credit into the tracker so you can watch "
+                "P&L and triggers — this does **not** place a trade."
             )
-    else:
-        st.info("Set your parameters and click 'Scan Iron Condors'.")
+            qa_labels = {
+                f"{r['Ticker']}  {r['Long Put']:g}/{r['Short Put']:g}.."
+                f"{r['Short Call']:g}/{r['Long Call']:g}  ({r['Expiry']})": i
+                for i, r in ic_df.iterrows()
+            }
+            qa1, qa2, qa3, qa4 = st.columns([3, 1, 1, 1])
+            qa_label = qa1.selectbox("Scanned condor", list(qa_labels), key="qa_label")
+            qa_row = ic_df.loc[qa_labels[qa_label]]
+            qa_qty = qa2.number_input("Contracts", min_value=1, value=1, step=1, key="qa_qty")
+            qa_key = (f"qa_credit_{qa_row['Ticker']}_{qa_row['Short Put']:g}"
+                      f"_{qa_row['Short Call']:g}_{qa_row['Expiry']}")
+            qa_credit = qa3.number_input(
+                "Your fill credit", min_value=0.0, value=float(qa_row["Credit"]), step=0.05,
+                key=qa_key, help="Defaults to the scan's mid credit; set it to your actual fill.",
+            )
+            if qa4.button("Track it", key="qa_track"):
+                add_position({
+                    "ticker": qa_row["Ticker"], "expiry": qa_row["Expiry"],
+                    "quantity": int(qa_qty),
+                    "long_put_strike": float(qa_row["Long Put"]),
+                    "short_put_strike": float(qa_row["Short Put"]),
+                    "short_call_strike": float(qa_row["Short Call"]),
+                    "long_call_strike": float(qa_row["Long Call"]),
+                    "entry_credit": float(qa_credit),
+                })
+                st.success(
+                    f"Now tracking {qa_row['Ticker']} "
+                    f"{qa_row['Short Put']:g}/{qa_row['Short Call']:g} in **My Condors** — "
+                    "no order was placed."
+                )
 
 
 with ic_track:
